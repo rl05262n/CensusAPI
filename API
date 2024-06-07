@@ -1,0 +1,142 @@
+library(tidycensus)
+library(dplyr)
+library(RJSONIO)
+#censusapi to get api variables and geography options
+library(censusapi)
+
+#Setting up Census API key
+census_api_key("e0b1e71c31be0d7b2344e9c2592cefcf98e137d5", install = TRUE)
+
+# Load data for population by state in 2020
+population_data <- get_acs(geography = "state",
+                           variables = "B01003_001",
+                           year = 2020,
+                           survey = "acs5")
+
+# View the data
+print(population_data)
+
+# Checking/Saving Api key&if saved no action needed. 
+get_api_key()
+
+#alt adding key to Renviron file
+Sys.setenv(CENSUS_KEY=PASTEYOURKEYHERE)
+
+# Reload .Renviron
+readRenviron("~/.Renviron")
+
+# Check to see that the expected key is output in your R console
+get_api_key()
+
+
+sahie_vars <- listCensusMetadata(
+  name = "timeseries/healthins/sahie", 
+  type = "variables")
+
+# See the full list of variables
+sahie_vars$name
+
+# call for census data using variables https://api.census.gov/data/2024/cps/basic/feb/variables.html 
+resURL <- "https://api.census.gov/data/2024/cps/basic/feb/?key=[e0b1e71c31be0d7b2344e9c2592cefcf98e137d5]&get=PRDASIAN" 
+
+# convert JSON content to R objects
+ljson <- fromJSON(resURL)
+
+# see the extracted data
+ljson
+
+
+
+# call for total population, white population and black population of Alabama
+# total population = P003001, white population = P003002,
+# black population = P003003;
+# FIPS code of Alabama = 01
+resURL <- "https://api.census.gov/data/2010/dec/sf1?key=[APIKEY]&get=P003001,P003002,P003003&for=state:01" 
+
+# convert JSON content to R objects
+ljson <- fromJSON(resURL)
+
+# see the extracted data
+ljson
+
+
+# call for total population, white population and black population of each county in Virginia
+resURL <- "https://api.census.gov/data/2010/dec/sf1?key=[APIKEY]&get=P003001,P003002,P003003&for=county:*&in=state:51"
+
+# convert and see first few rows of the data
+ljson <- fromJSON(resURL)
+head(ljson,3)
+
+
+# function to retrieve and convert data
+getData <- function(APIkey,state,varname){
+  resURL <- paste("https://api.census.gov/data/2010/dec/sf1?get=",varname,
+                  "&for=county:*&in=state:",state,"&key=",APIkey,sep="")
+  lJSON <- fromJSON(resURL) # convert JSON content to R objects
+  lJSON <- lJSON[2:length(lJSON)] # keep everything but the 1st element (var names) in lJSON
+  lJSON.cou <- sapply(lJSON,function(x) x[5]) # extract county
+  lJSON.tot <- sapply(lJSON,function(x) x[1]) # extract values of the variable for each county
+  lJSON.whi <- sapply(lJSON,function(x) x[2])
+  lJSON.bla <- sapply(lJSON,function(x) x[3])
+  df <- data.frame(lJSON.cou, as.numeric(lJSON.tot),as.numeric(lJSON.whi),
+                   as.numeric(lJSON.bla)) # create data frame with counties and values
+  names(df) <- c("county","tpop","wpop","bpop") # name the fields/vars in the data frame
+  return(df)
+}
+
+# API key for census data
+APIkey <- "yourAPIkey"
+
+# state code (Virginia)
+state <- 51
+
+# variables
+varname <- paste("P003001","P003002","P003003",sep=",")
+
+# call the function
+vapop <- getData(APIkey,state,varname)
+
+# see the first few rows
+head(vapop)
+
+
+#mapping census data: 
+# load package: rgdal
+library(rgdal)
+
+# Use readOGR() to read in spatial data:
+# dsn (data source name): specifies the directory in which the file is stored
+# layer: specifies the file name
+vacounty <- readOGR(dsn="tl_2010_51_county10", layer="tl_2010_51_county10")
+class(vacounty)
+
+# features: rows/observations
+# fields: columns/variables
+
+# plot vacounty
+plot(vacounty)  
+
+poverty_rate <- getCensus(
+  name = "timeseries/poverty/saipe",
+  vars = c("NAME", "SAEPOVRTALL_PT"),
+  region = "county:037",
+  regionin = "state:06",
+  time = "from 2010")
+
+poverty_rate
+
+# Install and load censusapi package
+install.packages("censusapi")
+library(censusapi)
+
+# Fetching data using getCensus function
+acs_simple <- getCensus(
+  name = "acs/acs5",
+  vintage = 2022,  # Specify the survey year
+  vars = c("NAME", "B01001_001E", "B19013_001E"),  # Variable codes for Name, Total Population and Median Household Income
+  region = "place:*",  # Requesting data for all places
+  regionin = "state:01"  # Filtering only places in state with FIPS code '01' (Alabama)
+)
+
+# Display the first few rows of the fetched data
+head(acs_simple)
