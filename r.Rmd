@@ -1,6 +1,9 @@
 install.packages(c("survey", "srvyr"))
 install.packages("tidyverse")
 install.packages("tidycensus")
+install.packages("tigris")
+install.packages("showtext")
+install.packages("mapdeck")
 library(tidyverse)
 library(tidycensus)
 
@@ -196,3 +199,149 @@ wy_relp %>%
   filter(between(AGEP, 0, 4)) %>% 
   to_survey() %>% 
   summarize(age_0_4 = survey_total(1))
+  
+  
+#using tigris: 
+library(tidycensus)
+library(tidyverse)
+library(tigris)
+options(tigris_use_cache = TRUE)
+
+us_components <- get_estimates(geography = "state", product = "components", vintage = 2023)
+
+us_components
+
+unique(us_components$variable)
+
+net_migration <- get_estimates(geography = "county",
+                               variables = "RNETMIG",
+                               vintage = 2023,
+                               geometry = TRUE,
+                               resolution = "20m") %>%
+  shift_geometry()
+
+net_migration
+
+
+library(showtext)
+font_add_google("Roboto")
+showtext_auto()
+
+order = c("-15 and below", "-15 to -5", "-5 to +5", "+5 to +15", "+15 and up")
+
+net_migration <- net_migration %>%
+  mutate(groups = case_when(
+    value > 15 ~ "+15 and up",
+    value > 5 ~ "+5 to +15",
+    value > -5 ~ "-5 to +5",
+    value > -15 ~ "-15 to -5",
+    TRUE ~ "-15 and below"
+  )) %>%
+  mutate(groups = factor(groups, levels = order))
+
+state_overlay <- states(
+  cb = TRUE,
+  resolution = "20m"
+) %>%
+  filter(GEOID != "72") %>%
+  shift_geometry()
+
+ggplot() +
+  geom_sf(data = net_migration, aes(fill = groups, color = groups), size = 0.1) +
+  geom_sf(data = state_overlay, fill = NA, color = "black", size = 0.1) +
+  scale_fill_brewer(palette = "PuOr", direction = -1) +
+  scale_color_brewer(palette = "PuOr", direction = -1, guide = FALSE) +
+  coord_sf(datum = NA) +
+  theme_minimal(base_family = "Roboto", base_size = 18) +
+  labs(title = "Net migration per 1000 residents by county",
+       subtitle = "US Census Bureau 2023 Population Estimates",
+       fill = "Rate",
+       caption = "Data acquired with the R tidycensus package | @kyle_e_walker")
+       
+       
+#estimates of population charactersitics: 
+la_age_hisp <- get_estimates(geography = "county", 
+                             product = "characteristics", 
+                             breakdown = c("SEX", "AGEGROUP", "HISP"),  
+                             breakdown_labels = TRUE, 
+                             state = "CA", 
+                             county = "Los Angeles",
+                             vintage = 2022)
+
+la_age_hisp
+
+
+compare <- filter(la_age_hisp, str_detect(AGEGROUP, "^Age"), 
+                  HISP != "Both Hispanic Origins", 
+                  SEX != "Both sexes") %>%
+  mutate(value = ifelse(SEX == "Male", -value, value))
+
+ggplot(compare, aes(x = AGEGROUP, y = value, fill = SEX)) + 
+  geom_bar(stat = "identity", width = 1) + 
+  theme_minimal(base_family = "Roboto") + 
+  scale_y_continuous(labels = function(y) paste0(abs(y / 1000), "k")) + 
+  scale_x_discrete(labels = function(x) gsub("Age | years", "", x)) + 
+  scale_fill_manual(values = c("darkred", "navy")) + 
+  coord_flip() + 
+  facet_wrap(~HISP) + 
+  labs(x = "", 
+       y = "2022 Census Bureau population estimate", 
+       title = "Population structure by Hispanic origin", 
+       subtitle = "Los Angeles County, California", 
+       fill = "", 
+       caption = "Data source: US Census Bureau population estimates & tidycensus R package")
+       
+       
+#using get flow: 
+wch_flows <- get_flows(
+  geography = "county",
+  state = "NY",
+  county = "Westchester",
+  year = 2018
+  )
+
+wch_flows %>% 
+  filter(!is.na(GEOID2)) %>% 
+  head()
+  
+  wch_flows %>% 
+  filter(variable == "MOVEDOUT") %>% 
+  arrange(desc(estimate)) %>% 
+  head()
+  
+  
+#mapping migration flows: 
+phx_flows <- get_flows(
+  geography = "metropolitan statistical area",
+  msa = 38060,
+  year = 2018,
+  geometry = TRUE
+  )
+
+phx_flows %>% 
+  head()
+  
+library(mapdeck)
+
+top_move_in <- phx_flows %>% 
+  filter(!is.na(GEOID2), variable == "MOVEDIN") %>% 
+  slice_max(n = 25, order_by = estimate) %>% 
+  mutate(
+    width = estimate / 500,
+    tooltip = paste0(
+      scales::comma(estimate * 5, 1),
+      " people moved from ", str_remove(FULL2_NAME, "Metro Area"),
+      " to ", str_remove(FULL1_NAME, "Metro Area"), " between 2014 and 2018"
+      )
+    )
+
+top_move_in %>% 
+  mapdeck(style = mapdeck_style("dark"), pitch = 45) %>% 
+  add_arc(
+    origin = "centroid1",
+    destination = "centroid2",
+    stroke_width = "width",
+    auto_highlight = TRUE,
+    highlight_colour = "#8c43facc",
+    tooltip = "tooltip"
+  )
