@@ -1,0 +1,198 @@
+install.packages(c("survey", "srvyr"))
+install.packages("tidyverse")
+install.packages("tidycensus")
+library(tidyverse)
+library(tidycensus)
+
+#Setting up Census API key
+census_api_key("42046945194e29ecdc8749f2ada4acb6f5f40a60", install = TRUE, overwrite=TRUE)
+
+readRenviron("~/.Renviron")
+
+pums_vars_2018 <- pums_variables %>% 
+  filter(year == 2018, survey == "acs1")
+  
+  pums_vars_2018 %>% 
+  distinct(var_code, var_label, data_type, level)
+  
+  
+  pums_vars_2018 %>% 
+  distinct(var_code, var_label, data_type, level) %>% 
+  filter(level == "person")
+  
+#Using get_pums to download PUMS data: 
+
+vt_pums <- get_pums(
+  variables = c("PUMA", "SEX", "AGEP", "SCHL"),
+  state = "VT",
+  survey = "acs1",
+  year = 2018
+  )
+  
+  vt_pums
+  
+  
+  
+  vt_pums_recoded <- get_pums(
+  variables = c("PUMA", "SEX", "AGEP", "SCHL"),
+  state = "VT",
+  survey = "acs1",
+  year = 2018,
+  recode = TRUE
+  )
+  
+  vt_pums_recoded
+  
+  sum(vt_pums_recoded$PWGTP)
+  vt_pums_recoded %>% 
+  count(PUMA, SEX_label, wt = PWGTP)
+  
+  
+  vt_pums_rep_weights <- get_pums(
+  variables = c("PUMA", "SEX", "AGEP", "SCHL"),
+  state = "VT",
+  survey = "acs1",
+  year = 2018,
+  recode = TRUE,
+  rep_weights = "person"
+  )
+  
+#using to_survey 
+
+  vt_survey_design <- to_survey(vt_pums_rep_weights)
+  
+  
+#calculate standard error: 
+library(srvyr, warn.conflicts = FALSE)
+
+vt_survey_design %>% 
+  survey_count(PUMA, SEX_label)
+  
+  
+  survey::svyby(~SEX_label, ~PUMA, design = vt_survey_design, survey::svytotal)
+  
+  
+  vt_survey_design %>% 
+  mutate(ba_above = SCHL %in% c("21", "22", "23", "24")) %>% 
+  filter(AGEP >= 25) %>% 
+  group_by(PUMA, SEX_label) %>% 
+  summarize(
+    age_25_up = survey_total(vartype = "ci"),
+    ba_above_n = survey_total(ba_above, vartype = "ci"),
+    ba_above_pct = survey_mean(ba_above, vartype = "ci")
+    )
+    
+    
+vt_pums_to_model <- get_pums(
+  variables = c("PUMA", "WAGP", "JWMNP", "JWTR", "COW", "ESR"),
+  state = "VT",
+  survey = "acs5",
+  year = 2018,
+  rep_weights = "person"
+  )
+  
+#filter observations: 
+vt_model_sd <- vt_pums_to_model %>% 
+  filter(
+    ESR == 1,   # civilian employed
+    JWTR != 11, # does not work at home
+    WAGP > 0,   # earned wages last year
+    JWMNP > 0   # commute more than zero min
+    ) %>%
+  mutate(
+    emp_type = case_when(
+      COW %in% c("1", "2")      ~ "private",
+      COW %in% c("3", "4", "5") ~ "public",
+      TRUE                      ~ "self"
+      )
+    ) %>%
+  to_survey()
+  
+#summarizing data; 
+vt_model_sd %>% 
+  summarize(
+    n              = survey_total(1),
+    mean_wage      = survey_mean(WAGP),
+    median_wage    = survey_median(WAGP),
+    mean_commute   = survey_mean(JWMNP),
+    median_commute = survey_median(JWMNP)
+    )
+    
+vt_model_sd %>% 
+  survey_count(emp_type)
+  
+#linear regression model: 
+model <- survey::svyglm(log(JWMNP) ~ log(WAGP) + emp_type + PUMA, design = vt_model_sd)
+summary(model)
+
+
+#mapping PUMS data: 
+ne_states <- c("VT", "NH", "ME", "MA", "CT", "RI")
+ne_pumas <- map(ne_states, tigris::pumas, class = "sf", cb = TRUE, year = 2018) %>% 
+  reduce(rbind)
+
+ne_pums <- get_pums(
+  variables = c("PUMA", "POVPIP"),
+  state = ne_states,
+  survey = "acs1",
+  year = 2018
+  )
+
+ne_pov <- ne_pums %>%
+  group_by(ST, PUMA) %>%
+  summarize(
+    total_pop = sum(PWGTP),
+    pct_in_pov = sum(PWGTP[POVPIP < 200]) / total_pop
+  )
+  
+
+ne_pumas %>%
+  left_join(ne_pov, by = c("STATEFP10" = "ST", "PUMACE10" = "PUMA")) %>%
+  ggplot(aes(fill = pct_in_pov)) +
+  geom_sf() +
+  scale_fill_viridis_b(
+    name = NULL,
+    option = "magma",
+    labels = scales::label_percent(1)
+    ) +
+  labs(title = "Percentage of population below 200% of the poverty line") +
+  theme_void()
+  
+  
+#verification: 
+wy_relp <- get_pums(
+  variables = "RELP",
+  state = "Wyoming",
+  survey = "acs1",
+  year = 2018,
+  rep_weights = "person"
+)
+
+ut_ten <- get_pums(
+  variables = "TEN",
+  state = "Utah",
+  survey = "acs1",
+  year = 2018,
+  rep_weights = "housing"
+)
+
+hi_age <- get_pums(
+  variables = "AGEP",
+  state = "Hawaii",
+  survey = "acs1",
+  year = 2018,
+  rep_weights = "person"
+)
+wy_relp %>% 
+  to_survey() %>% 
+  survey_count(RELP) %>% 
+  filter(RELP == "16")
+  ut_ten %>% 
+  distinct(SERIALNO, .keep_all = TRUE) %>%
+  to_survey(type = "housing") %>% 
+  survey_count(TEN) %>% 
+  filter(TEN == 2)
+  hi_age %>% 
+  filter(between(AGEP, 0, 4)) %>% 
+  to_survey() %>% 
+  summarize(age_0_4 = survey_total(1))
